@@ -28,6 +28,7 @@ ui = ["streamlit>=1.40"]
 
 [project.scripts]
 policy-agent = "policy_agent.cli:main"
+policy-agent-mcp = "policy_agent.mcp_server:main"
 
 [dependency-groups]
 dev = [

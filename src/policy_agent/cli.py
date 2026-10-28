@@ -1,4 +1,4 @@
-"""Command line: ``policy-agent ask | ingest | eval``."""
+"""Command line: ``policy-agent ask | ingest | eval | serve``."""
 
 from __future__ import annotations
 
@@ -66,6 +66,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return eval_main(args)
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    import uvicorn
+
+    uvicorn.run("policy_agent.api.app:create_app", factory=True, host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="policy-agent", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -80,6 +87,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ingest = sub.add_parser("ingest", help="load, chunk and embed the policy corpus (cached)")
     ingest.set_defaults(fn=cmd_ingest)
+
+    serve = sub.add_parser("serve", help="run the HTTP API (needs the api extra)")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.set_defaults(fn=cmd_serve)
 
     ev = sub.add_parser("eval", help="run the golden-set evaluation")
     ev.add_argument("--llm", choices=get_args(Provider), default=None)

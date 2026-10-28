@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      POLICY_AGENT_LLM__PROVIDER: ${POLICY_AGENT_LLM__PROVIDER:-fake}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      POLICY_AGENT_OBSERVABILITY__TRACING_ENABLED: "true"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    depends_on:
+      - jaeger
+
+  jaeger:
+    image: jaegertracing/jaeger:2.21.0
+    ports:
+      - "16686:16686"  # UI
+      - "4318:4318"    # OTLP/HTTP
