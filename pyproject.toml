@@ -52,8 +52,6 @@ packages = ["src/policy_agent"]
 line-length = 110
 target-version = "py312"
 src = ["src", "tests"]
-# legacy v1 code, removed in the agent-loop milestone
-extend-exclude = ["src/agent", "src/retrieval", "src/tools", "src/prompts", "src/logging", "src/__init__.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "N"]

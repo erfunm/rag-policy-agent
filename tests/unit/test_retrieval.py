@@ -4,26 +4,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from policy_agent.config import RetrievalSettings
 from policy_agent.retrieval.bm25 import BM25Index, tokenize
 from policy_agent.retrieval.dense import DenseIndex, HashingEmbedder
-from policy_agent.retrieval.hybrid import HybridRetriever, build_retriever, rrf_fuse
-
-TODAY = date(2026, 10, 28)
-
-
-class KeywordReranker:
-    """Scores by how many query words appear in the text: deterministic stand-in for a cross-encoder."""
-
-    def rerank(self, query: str, texts: list[str]) -> list[float]:
-        words = set(tokenize(query))
-        return [float(len(words & set(tokenize(t)))) - 1.0 for t in texts]
-
-
-@pytest.fixture(scope="module")
-def retriever(tmp_path_factory: pytest.TempPathFactory) -> HybridRetriever:
-    settings = RetrievalSettings(cache_dir=tmp_path_factory.mktemp("cache"), mode="hybrid_rerank")
-    return build_retriever(settings, embedder=HashingEmbedder(), reranker=KeywordReranker())
+from policy_agent.retrieval.hybrid import HybridRetriever, rrf_fuse
+from tests.conftest import TODAY
 
 
 def test_rrf_fuse_rewards_agreement() -> None:
