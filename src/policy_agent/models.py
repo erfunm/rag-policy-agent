@@ -57,6 +57,8 @@ class RetrievedChunk(BaseModel):
     score: float
     # Dense cosine similarity to the query; comparable across queries, used for the evidence floor.
     relevance: float
+    # Cross-encoder score when the reranker ran.
+    rerank_score: float | None = None
 
 
 class Usage(BaseModel):

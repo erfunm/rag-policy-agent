@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -26,6 +26,8 @@ Provider = Literal["fake", "anthropic", "openai"]
 
 
 class RetrievalSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     policies_dir: Path = Path("data/policies")
     cases_path: Path = Path("data/cases.json")
     cache_dir: Path = Path(".cache")
@@ -36,8 +38,10 @@ class RetrievalSettings(BaseModel):
     candidate_pool: int = 20
     top_k: int = 5
     max_chunk_words: int = 180
-    # Dense cosine similarity of the best hit below which evidence is reported as insufficient.
-    min_relevance: float = 0.6
+    # Evidence floor. With reranking on, the best cross-encoder score must reach min_rerank_score;
+    # otherwise the best dense cosine similarity must reach min_relevance. Tuned on the golden set.
+    min_relevance: float = 0.7
+    min_rerank_score: float = -3.0
 
 
 class LLMSettings(BaseModel):

@@ -5,7 +5,8 @@ retrieval:
   dense_model: BAAI/bge-small-en-v1.5
   rerank_model: Xenova/ms-marco-MiniLM-L-6-v2
   top_k: 5
-  min_relevance: 0.6
+  min_relevance: 0.7        # evidence floor without rerank (dense cosine)
+  min_rerank_score: -3.0    # evidence floor with rerank (cross-encoder logit)
 llm:
   provider: fake             # fake | anthropic | openai
   anthropic_model: claude-sonnet-5-5
