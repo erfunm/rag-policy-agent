@@ -7,13 +7,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from policy_agent.guardrails import injection
 from policy_agent.models import Chunk, PolicyDoc
 from policy_agent.tools.registry import Tool, ToolContext, ToolOutput, error_output
 
 
-def render_chunk_text(chunk: Chunk, ctx: ToolContext) -> str:
-    """Hook for the injection guardrail, which wraps and sanitises retrieved text (see guardrails)."""
-    return chunk.text
+def render_chunk_text(chunk: Chunk, ctx: ToolContext, flags: list[str]) -> str:
+    """Sanitise and spotlight retrieved text before it reaches the model."""
+    clean = injection.sanitise(chunk.text, strip=ctx.settings.guardrails.strip_injections)
+    if clean.flagged and "injection_in_retrieved_text" not in flags:
+        flags.append("injection_in_retrieved_text")
+    return injection.spotlight(chunk.chunk_id, clean.text)
 
 
 class SearchPoliciesArgs(BaseModel):
@@ -27,6 +31,7 @@ class SearchPoliciesArgs(BaseModel):
 def search_policies(args: SearchPoliciesArgs, ctx: ToolContext) -> ToolOutput:
     as_of = args.as_of or ctx.as_of
     res = ctx.retriever.search(args.query, ctx.role, as_of)
+    flags: list[str] = []
     results: list[dict[str, Any]] = [
         {
             "chunk_id": r.chunk.chunk_id,
@@ -36,7 +41,7 @@ def search_policies(args: SearchPoliciesArgs, ctx: ToolContext) -> ToolOutput:
             "effective_date": r.chunk.effective_date.isoformat(),
             "section": r.chunk.section,
             "score": round(r.score, 4),
-            "text": render_chunk_text(r.chunk, ctx),
+            "text": render_chunk_text(r.chunk, ctx, flags),
         }
         for r in res.results
     ]
@@ -48,6 +53,7 @@ def search_policies(args: SearchPoliciesArgs, ctx: ToolContext) -> ToolOutput:
             "results": results,
         },
         evidence_ids=[r.chunk.chunk_id for r in res.results],
+        flags=flags,
     )
 
 
@@ -75,6 +81,7 @@ def get_policy(args: GetPolicyArgs, ctx: ToolContext) -> ToolOutput:
     if doc is None:
         return error_output(f"no version of {args.policy_id} was in force on {as_of.isoformat()}")
     sections = [c for c in ctx.retriever.chunks if c.policy_id == doc.policy_id and c.version == doc.version]
+    flags: list[str] = []
     return ToolOutput(
         content={
             "policy_id": doc.policy_id,
@@ -88,11 +95,12 @@ def get_policy(args: GetPolicyArgs, ctx: ToolContext) -> ToolOutput:
                 {"version": v.version, "effective_date": v.effective_date.isoformat()} for v in versions
             ],
             "sections": [
-                {"chunk_id": c.chunk_id, "section": c.section, "text": render_chunk_text(c, ctx)}
+                {"chunk_id": c.chunk_id, "section": c.section, "text": render_chunk_text(c, ctx, flags)}
                 for c in sections
             ],
         },
         evidence_ids=[c.chunk_id for c in sections],
+        flags=flags,
     )
 
 

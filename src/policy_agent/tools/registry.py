@@ -40,6 +40,8 @@ class ToolOutput(BaseModel):
     content: dict[str, Any]
     evidence_ids: list[str] = Field(default_factory=list)
     is_error: bool = False
+    # Guardrail signals raised while producing the output, e.g. injection found in retrieved text.
+    flags: list[str] = Field(default_factory=list)
 
 
 def error_output(message: str) -> ToolOutput:

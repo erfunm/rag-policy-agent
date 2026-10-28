@@ -26,6 +26,7 @@ from policy_agent.agent.prompts import (
     render_user_message,
 )
 from policy_agent.config import Settings
+from policy_agent.guardrails import grounding, injection, pii
 from policy_agent.llm.base import LLMClient, LLMError, LLMTurn, Message, ToolCall, ToolSpec
 from policy_agent.models import AgentResponse, AskRequest, Confidence, Status, ToolCallRecord, Usage
 from policy_agent.retrieval.hybrid import HybridRetriever
@@ -99,7 +100,8 @@ class PolicyAgent:
         ctx = ToolContext(
             role=request.role, as_of=as_of, retriever=self.retriever, cases=self.cases, settings=self.settings
         )
-        messages = [Message(role="user", content=render_user_message(request.question, as_of))]
+        question = self._screen_input(state)
+        messages = [Message(role="user", content=render_user_message(question, as_of))]
         response = yield from self._run(state, ctx, messages)
         yield AgentEvent(type="final", data=response.model_dump(mode="json"))
 
@@ -144,6 +146,7 @@ class PolicyAgent:
                 output, record = self.registry.execute(call, ctx, self.settings.agent.tool_timeout_s)
                 state.tool_calls.append(record)
                 state.evidence.extend(i for i in output.evidence_ids if i not in state.evidence)
+                state.flags.extend(output.flags)
                 messages.append(
                     Message(
                         role="tool",
@@ -170,6 +173,18 @@ class PolicyAgent:
             return self._finalize(state, args)
         return self._escalate(state, "step_limit_reached")
 
+    def _screen_input(self, state: _RunState) -> str:
+        question = state.request.question
+        if self.settings.guardrails.redact_input_pii:
+            red = pii.redact(question)
+            if red.redacted:
+                state.flags.append("pii_redacted")
+                question = red.text
+        if injection.detect(question):
+            # Flag and continue: the answer is still constrained to cited, retrieved evidence.
+            state.flags.append("injection_suspected_in_question")
+        return question
+
     @staticmethod
     def _tool_error(call: ToolCall, message: str) -> Message:
         return Message(
@@ -179,11 +194,13 @@ class PolicyAgent:
     def _finalize(self, state: _RunState, args: SubmitAnswerArgs) -> AgentResponse:
         if args.status == "escalated":
             return self._escalate(state, args.reason or "model_escalated")
-        unknown = [c for c in args.citations if c not in state.evidence]
-        if not args.citations or unknown:
+        check = grounding.verify(args.answer, args.citations, state.evidence)
+        if not check.ok:
             state.flags.append("grounding_failed")
-            return self._escalate(state, f"ungrounded citations: {unknown or 'none given'}")
-        return self._response(state, "answered", args.answer, args.citations, args.confidence, None)
+            return self._escalate(state, f"grounding check failed: {check.reason}")
+        if check.uncited_sentences:
+            state.flags.append("uncited_sentences")
+        return self._response(state, "answered", args.answer, check.citations, args.confidence, None)
 
     def _escalate(self, state: _RunState, reason: str) -> AgentResponse:
         return self._response(state, "escalated", self.settings.agent.escalation_message, [], "low", reason)
