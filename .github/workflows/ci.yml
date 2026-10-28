@@ -17,12 +17,10 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - name: Cache ONNX models and index
+      - name: Cache ONNX models and embedding index
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cache/fastembed
-            .cache
+          path: .cache
           key: models-${{ hashFiles('configs/settings.yaml', 'data/policies/**') }}
           restore-keys: models-
       - run: uv sync --locked
