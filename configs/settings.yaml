@@ -1,0 +1,21 @@
+# Defaults live in src/policy_agent/config.py; this file documents the knobs worth tuning.
+# Any value can be overridden with env vars, e.g. POLICY_AGENT_LLM__PROVIDER=anthropic.
+retrieval:
+  mode: hybrid_rerank        # bm25 | dense | hybrid | hybrid_rerank
+  dense_model: BAAI/bge-small-en-v1.5
+  rerank_model: Xenova/ms-marco-MiniLM-L-6-v2
+  top_k: 5
+  min_relevance: 0.6
+llm:
+  provider: fake             # fake | anthropic | openai
+  anthropic_model: claude-sonnet-5-5
+  effort: medium
+agent:
+  max_steps: 6
+  tool_timeout_s: 10
+guardrails:
+  redact_input_pii: true
+  strip_injections: true
+observability:
+  audit_log_path: logs/audit.jsonl
+  tracing_enabled: false

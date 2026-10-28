@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      # No secrets: everything runs against the deterministic FakeLLM.
+      POLICY_AGENT_LLM__PROVIDER: fake
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Cache ONNX models and index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/fastembed
+            .cache
+          key: models-${{ hashFiles('configs/settings.yaml', 'data/policies/**') }}
+          restore-keys: models-
+      - run: uv sync --locked
+      - name: Lint
+        run: make lint
+      - name: Type check
+        run: make type
+      - name: Tests
+        run: make test
+      - name: Eval quality gate (FakeLLM)
+        run: make eval
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/reports/
