@@ -54,6 +54,8 @@ class LLMSettings(BaseModel):
     # Server-side refusal fallback (Claude API beta); disable for proxies that reject beta params.
     anthropic_fallbacks: bool = True
     timeout_s: float = 60.0
+    # Optional LLM-as-judge faithfulness grader used by `policy-agent eval --judge`.
+    judge_model: str = "claude-haiku-5-5"
     # USD per million tokens: (input, output). Unknown models are costed at 0 and flagged in the report.
     prices: dict[str, tuple[float, float]] = Field(
         default_factory=lambda: {

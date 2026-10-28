@@ -63,12 +63,21 @@ def _results(messages: Sequence[Message]) -> list[_Result]:
     return out
 
 
+def _terms(text: str) -> set[str]:
+    return {t[:-1] if len(t) > 3 and t.endswith("s") else t for t in tokenize(text)}
+
+
 def _best_sentences(text: str, question: str, n: int) -> list[str]:
+    """Pick the n sentences sharing the most terms with the question; prefer ones stating a number."""
     inner = _UNTRUSTED.search(text)
     body = inner.group(1) if inner else text
     sentences = [s.strip() for s in _SENTENCE_SPLIT.split(body) if s.strip() and "[removed" not in s.lower()]
-    q = set(tokenize(question))
-    ranked = sorted(range(len(sentences)), key=lambda i: (-len(q & set(tokenize(sentences[i]))), i))
+    q = _terms(question)
+
+    def score(i: int) -> float:
+        return len(q & _terms(sentences[i])) + (0.5 if re.search(r"\d", sentences[i]) else 0.0)
+
+    ranked = sorted(range(len(sentences)), key=lambda i: (-score(i), i))
     return [sentences[i] for i in sorted(ranked[:n])]
 
 

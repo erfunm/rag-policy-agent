@@ -1,4 +1,4 @@
-"""Command line: ``policy-agent ask | ingest``."""
+"""Command line: ``policy-agent ask | ingest | eval``."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from datetime import date
 from typing import get_args
 
-from policy_agent.config import Provider, get_settings
+from policy_agent.config import Provider, RetrievalMode, get_settings
 from policy_agent.models import ROLES, AgentResponse, AskRequest
 
 _STATUS_COLOUR = {"answered": "\033[32m", "escalated": "\033[33m"}
@@ -60,6 +60,12 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    from policy_agent.evaluation import main as eval_main
+
+    return eval_main(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="policy-agent", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -75,6 +81,20 @@ def build_parser() -> argparse.ArgumentParser:
     ingest = sub.add_parser("ingest", help="load, chunk and embed the policy corpus (cached)")
     ingest.set_defaults(fn=cmd_ingest)
 
+    ev = sub.add_parser("eval", help="run the golden-set evaluation")
+    ev.add_argument("--llm", choices=get_args(Provider), default=None)
+    ev.add_argument("--golden", default="evals/golden.jsonl")
+    ev.add_argument("--thresholds", default="evals/thresholds.yaml")
+    ev.add_argument("--out", default="evals/reports")
+    ev.add_argument(
+        "--mode", choices=get_args(RetrievalMode), default=None, help="retrieval mode for the agent run"
+    )
+    ev.add_argument(
+        "--judge", action="store_true", help="LLM-as-judge faithfulness (needs ANTHROPIC_API_KEY)"
+    )
+    ev.add_argument("--no-gate", action="store_true", help="report only; never fail on thresholds")
+    ev.add_argument("--limit", type=int, default=None, help="only the first N cases (smoke runs)")
+    ev.set_defaults(fn=cmd_eval)
     return parser
 
 

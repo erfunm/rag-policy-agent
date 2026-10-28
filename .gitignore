@@ -12,3 +12,4 @@ htmlcov/
 dist/
 evals/reports/*.json
 !evals/reports/.gitkeep
+evals/reports/*.jsonl
