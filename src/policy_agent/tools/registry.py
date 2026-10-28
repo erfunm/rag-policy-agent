@@ -21,6 +21,7 @@ from policy_agent.llm.base import ToolCall, ToolSpec
 from policy_agent.models import Role, ToolCallRecord
 
 if TYPE_CHECKING:
+    from policy_agent.observability.tracing import Span, Tracer
     from policy_agent.retrieval.hybrid import HybridRetriever
     from policy_agent.tools.cases import CaseStore
 
@@ -34,6 +35,9 @@ class ToolContext:
     retriever: HybridRetriever
     cases: CaseStore
     settings: Settings
+    tracer: Tracer | None = None
+    # The execute_tool span of the current call, so tools can attach child spans.
+    span: Span | None = None
 
 
 class ToolOutput(BaseModel):

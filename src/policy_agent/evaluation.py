@@ -225,6 +225,23 @@ def judge_faithfulness(results: list[CaseResult], retriever: HybridRetriever, mo
         r.judge = verdict.model_dump() if verdict else {"faithful": None, "error": msg.stop_reason}
 
 
+def count_audit_pii_leaks(audit_path: Path, results: list[CaseResult]) -> int | None:
+    """Raw PII strings from the pii cases that appear anywhere in that request's audit record."""
+    if not audit_path.exists():
+        return None
+    records = {}
+    for line in audit_path.read_text(encoding="utf-8").splitlines():
+        rec = json.loads(line)
+        records[rec.get("request_id")] = line
+    leaks = 0
+    for r in results:
+        if r.case.category != "pii":
+            continue
+        line = records.get(r.response.request_id, "")
+        leaks += sum(1 for raw in r.case.must_not_contain if raw in line)
+    return leaks
+
+
 def _percentile(values: list[float], p: float) -> float | None:
     if not values:
         return None
@@ -415,6 +432,7 @@ def run_eval(
         results.append(score_case(case, resp, retriever))
     if judge:
         judge_faithfulness(results, retriever, settings.llm.judge_model)
+    audit_pii_leaks = count_audit_pii_leaks(agent.audit.path, results)
     report: dict[str, Any] = {
         "meta": {
             "provider": agent.llm.provider,
@@ -429,7 +447,7 @@ def run_eval(
         "retrieval_by_mode": {r["mode"]: r for r in retrieval},
         "evidence_floor_sweep": evidence_floor_sweep(retriever, cases),
         "evidence_floor": settings.retrieval.min_rerank_score,
-        "agent": agent_metrics(results),
+        "agent": {**agent_metrics(results), "audit_pii_leaks": audit_pii_leaks},
         "per_category": per_category(results),
         "cases": [r.to_json() for r in results],
     }

@@ -30,7 +30,32 @@ class SearchPoliciesArgs(BaseModel):
 
 def search_policies(args: SearchPoliciesArgs, ctx: ToolContext) -> ToolOutput:
     as_of = args.as_of or ctx.as_of
+    span = None
+    if ctx.tracer is not None:
+        span = ctx.tracer.start(
+            "retrieval policy-library",
+            kind="client",
+            parent=ctx.span,
+            attributes={
+                "gen_ai.operation.name": "retrieval",
+                "gen_ai.data_source.id": "policy-library",
+                "gen_ai.retrieval.top_k": ctx.settings.retrieval.top_k,
+                "policy_agent.retrieval.mode": ctx.settings.retrieval.mode,
+                "policy_agent.as_of": as_of.isoformat(),
+            },
+        )
     res = ctx.retriever.search(args.query, ctx.role, as_of)
+    if span is not None:
+        span.set_many(
+            {
+                "policy_agent.retrieval.results": len(res.results),
+                "policy_agent.retrieval.top_score": res.results[0].score if res.results else None,
+                "policy_agent.retrieval.evidence_sufficient": res.evidence_sufficient,
+                "policy_agent.retrieval.access_restricted": res.access_restricted,
+                "policy_agent.retrieval.chunk_ids": [r.chunk.chunk_id for r in res.results],
+            }
+        )
+        span.end()
     flags: list[str] = []
     results: list[dict[str, Any]] = [
         {

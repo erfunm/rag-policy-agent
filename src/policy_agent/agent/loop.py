@@ -9,6 +9,7 @@ final structured answer, and downgrading to an escalation when it cannot be trus
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 import uuid
@@ -29,6 +30,8 @@ from policy_agent.config import Settings
 from policy_agent.guardrails import grounding, injection, pii
 from policy_agent.llm.base import LLMClient, LLMError, LLMTurn, Message, ToolCall, ToolSpec
 from policy_agent.models import AgentResponse, AskRequest, Confidence, Status, ToolCallRecord, Usage
+from policy_agent.observability.audit import AuditLogger
+from policy_agent.observability.tracing import Span, Tracer, setup_tracing
 from policy_agent.retrieval.hybrid import HybridRetriever
 from policy_agent.tools import ToolContext, ToolRegistry, default_registry
 from policy_agent.tools.cases import CaseStore
@@ -77,12 +80,16 @@ class PolicyAgent:
         retriever: HybridRetriever,
         cases: CaseStore,
         registry: ToolRegistry | None = None,
+        audit: AuditLogger | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self.settings = settings
         self.llm = llm
         self.retriever = retriever
         self.cases = cases
         self.registry = registry or default_registry()
+        self.audit = audit or AuditLogger(settings.observability.audit_log_path)
+        self.tracer = tracer or Tracer()
         self.tool_specs = [*self.registry.specs(), SUBMIT_SPEC]
 
     def ask(self, request: AskRequest) -> AgentResponse:
@@ -96,23 +103,90 @@ class PolicyAgent:
     def stream(self, request: AskRequest) -> Iterator[AgentEvent]:
         state = _RunState(request, uuid.uuid4().hex)
         as_of = request.as_of or date.today()
-        yield AgentEvent(type="start", data={"request_id": state.request_id, "as_of": as_of.isoformat()})
-        ctx = ToolContext(
-            role=request.role, as_of=as_of, retriever=self.retriever, cases=self.cases, settings=self.settings
+        root = self.tracer.start(
+            "invoke_agent policy-agent",
+            attributes={
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": "policy-agent",
+                "gen_ai.provider.name": self.llm.provider,
+                "gen_ai.request.model": self.llm.model,
+                "gen_ai.prompt.version": PROMPT_VERSION,
+                "policy_agent.request_id": state.request_id,
+                "policy_agent.role": request.role,
+                "policy_agent.as_of": as_of.isoformat(),
+            },
         )
-        question = self._screen_input(state)
-        messages = [Message(role="user", content=render_user_message(question, as_of))]
-        response = yield from self._run(state, ctx, messages)
-        yield AgentEvent(type="final", data=response.model_dump(mode="json"))
+        try:
+            yield AgentEvent(
+                type="start",
+                data={"request_id": state.request_id, "as_of": as_of.isoformat(), "trace_id": root.trace_id},
+            )
+            ctx = ToolContext(
+                role=request.role,
+                as_of=as_of,
+                retriever=self.retriever,
+                cases=self.cases,
+                settings=self.settings,
+                tracer=self.tracer,
+            )
+            question = self._screen_input(state)
+            messages = [Message(role="user", content=render_user_message(question, as_of))]
+            response = yield from self._run(state, ctx, messages, root)
+            root.set_many(
+                {
+                    "gen_ai.response.model": response.model,
+                    "gen_ai.usage.input_tokens": response.usage.input_tokens,
+                    "gen_ai.usage.output_tokens": response.usage.output_tokens,
+                    "policy_agent.status": response.status,
+                    "policy_agent.reason": response.reason,
+                    "policy_agent.flags": response.flags,
+                    "policy_agent.citations": response.citations,
+                    "policy_agent.steps": response.steps,
+                    "policy_agent.cost_usd": response.cost_usd,
+                }
+            )
+            self.audit.log_request(request, response, self.llm.provider, root.trace_id)
+            yield AgentEvent(type="final", data=response.model_dump(mode="json"))
+        finally:
+            root.end()
+
+    def _chat(self, messages: list[Message], parent: Span) -> LLMTurn:
+        span = self.tracer.start(
+            f"chat {self.llm.model}",
+            kind="client",
+            parent=parent,
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": self.llm.provider,
+                "gen_ai.request.model": self.llm.model,
+                "gen_ai.request.max_tokens": self.settings.llm.max_tokens,
+            },
+        )
+        try:
+            turn = self.llm.chat(SYSTEM_PROMPT, messages, self.tool_specs)
+        except LLMError as exc:
+            span.error(type(exc).__name__, str(exc))
+            span.end()
+            raise
+        span.set_many(
+            {
+                "gen_ai.response.model": turn.model or None,
+                "gen_ai.response.finish_reasons": [turn.stop_reason],
+                "gen_ai.usage.input_tokens": turn.usage.input_tokens,
+                "gen_ai.usage.output_tokens": turn.usage.output_tokens,
+            }
+        )
+        span.end()
+        return turn
 
     def _run(
-        self, state: _RunState, ctx: ToolContext, messages: list[Message]
+        self, state: _RunState, ctx: ToolContext, messages: list[Message], root: Span
     ) -> Generator[AgentEvent, None, AgentResponse]:
         nudged = False
         for step in range(1, self.settings.agent.max_steps + 1):
             state.steps = step
             try:
-                turn = self.llm.chat(SYSTEM_PROMPT, messages, self.tool_specs)
+                turn = self._chat(messages, root)
             except LLMError as exc:
                 return self._escalate(state, f"llm_error: {exc}")
             state.usage += turn.usage
@@ -143,7 +217,22 @@ class PolicyAgent:
                 yield AgentEvent(
                     type="tool_call", data={"id": call.id, "name": call.name, "arguments": call.arguments}
                 )
-                output, record = self.registry.execute(call, ctx, self.settings.agent.tool_timeout_s)
+                tool_span = self.tracer.start(
+                    f"execute_tool {call.name}",
+                    parent=root,
+                    attributes={
+                        "gen_ai.operation.name": "execute_tool",
+                        "gen_ai.tool.name": call.name,
+                        "gen_ai.tool.call.id": call.id,
+                        "gen_ai.tool.type": "function",
+                    },
+                )
+                output, record = self.registry.execute(
+                    call, dataclasses.replace(ctx, span=tool_span), self.settings.agent.tool_timeout_s
+                )
+                if output.is_error:
+                    tool_span.error("tool_error", str(output.content.get("error", "")))
+                tool_span.end()
                 state.tool_calls.append(record)
                 state.evidence.extend(i for i in output.evidence_ids if i not in state.evidence)
                 state.flags.extend(output.flags)
@@ -240,6 +329,7 @@ def build_agent(settings: Settings, llm: LLMClient | None = None) -> PolicyAgent
     from policy_agent.llm import make_llm
     from policy_agent.retrieval.hybrid import get_retriever
 
+    setup_tracing(settings.observability)
     return PolicyAgent(
         settings=settings,
         llm=llm or make_llm(settings.llm),

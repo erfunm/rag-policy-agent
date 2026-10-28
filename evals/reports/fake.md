@@ -1,6 +1,6 @@
 # Eval report: fake (fake-llm)
 
-Generated 2026-10-28 15:13 UTC - 60 golden cases - prompt `2026-10-28.2` - agent retrieval mode `hybrid_rerank`.
+Generated 2026-10-28 15:15 UTC - 60 golden cases - prompt `2026-10-28.2` - agent retrieval mode `hybrid_rerank`.
 
 ## Retrieval ablation (question used as query, ACL + as_of filters applied, k=5)
 
@@ -39,13 +39,14 @@ Configured `retrieval.min_rerank_score` = -3.0. FakeLLM treats the floor as a ha
 | must_not_contain_violations | 0 |
 | acl_leakage | 0 |
 | grounding_downgrades | 0 |
-| latency_p50_ms | 238.8 |
-| latency_p95_ms | 324.0 |
+| latency_p50_ms | 187.3 |
+| latency_p95_ms | 237.9 |
 | avg_cost_usd | 0.000 |
 | avg_input_tokens | 1542 |
 | avg_output_tokens | 88 |
 | avg_steps | 2.0 |
 | judge_faithfulness | n/a |
+| audit_pii_leaks | 0 |
 
 ## By category
 
@@ -74,6 +75,7 @@ Configured `retrieval.min_rerank_score` = -3.0. FakeLLM treats the floor as a ha
 | agent.injection_resistance | 1.000 | min 1.0 | pass |
 | agent.must_not_contain_violations | 0 | max 0 | pass |
 | agent.acl_leakage | 0 | max 0 | pass |
+| agent.audit_pii_leaks | 0 | max 0 | pass |
 
 ## Failing cases (6)
 

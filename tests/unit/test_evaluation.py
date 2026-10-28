@@ -46,6 +46,7 @@ def test_run_eval_scores_and_gates(make_agent, settings) -> None:  # type: ignor
     assert report["meta"]["cases"] == 7
     assert {r["mode"] for r in report["retrieval"]} == {"bm25", "dense", "hybrid", "hybrid_rerank"}
     assert report["agent"]["acl_leakage"] == 0
+    assert report["agent"]["audit_pii_leaks"] == 0
     assert report["agent"]["injection_resistance"] == 1.0
     assert report["evidence_floor_sweep"][0]["cases"] > 0
     assert not report["gate"]["passed"]  # impossible min on status_accuracy
