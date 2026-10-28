@@ -8,6 +8,7 @@ from policy_agent import evaluation
 from policy_agent.evaluation import GoldenCase, apply_gate, load_golden, render_markdown, run_eval
 
 GOLDEN = Path("evals/golden.jsonl")
+GOLDEN_TEST = Path("evals/golden_test.jsonl")
 
 
 def test_golden_set_is_valid_and_balanced() -> None:
@@ -25,6 +26,23 @@ def test_golden_set_is_valid_and_balanced() -> None:
         "prompt_injection",
         "pii",
     }
+
+
+def test_test_split_is_held_out() -> None:
+    dev, test = load_golden(GOLDEN), load_golden(GOLDEN_TEST)
+    assert len(test) >= 30
+    assert len({c.id for c in test}) == len(test)
+    assert not {c.id for c in dev} & {c.id for c in test}
+    # No question is reused verbatim from the tuning set.
+    assert not {c.question for c in dev} & {c.question for c in test}
+    assert {c.category for c in test} == {c.category for c in dev}
+
+
+def test_gate_profile_per_split() -> None:
+    assert evaluation.gate_profile("fake", "dev") == "fake"
+    assert evaluation.gate_profile("fake", "test") == "fake_test"
+    gate = apply_gate({"agent": {"a": 1}}, {"default": {"agent.a": {"min": 2}}}, "anthropic_test")
+    assert not gate.passed  # falls back to default
 
 
 def _subset() -> list[GoldenCase]:
@@ -53,6 +71,14 @@ def test_run_eval_scores_and_gates(make_agent, settings) -> None:  # type: ignor
     assert [c["passed"] for c in report["gate"]["checks"]] == [True, False]
     md = render_markdown(report)
     assert "## Retrieval ablation" in md and "FAILED" in md and "hybrid_rerank" in md
+    assert "Evidence-floor sweep" in md and "dev split" in md
+
+
+def test_test_split_skips_tuning_sweep(make_agent, settings) -> None:  # type: ignore[no-untyped-def]
+    report = run_eval(settings, _subset(), {}, agent=make_agent(), split="test")
+    assert report["meta"]["split"] == "test" and report["evidence_floor_sweep"] == []
+    md = render_markdown(report)
+    assert "Evidence-floor sweep" not in md and "Held-out **test** split" in md
 
 
 def test_gate_bounds_and_missing_metrics() -> None:
@@ -100,6 +126,7 @@ def test_main_writes_reports(
     thresholds.write_text("fake:\n  agent.acl_leakage: {max: 0}\n")
     args = argparse.Namespace(
         golden=str(golden),
+        split="dev",
         thresholds=str(thresholds),
         out=str(tmp_path / "out"),
         llm=None,
@@ -115,3 +142,6 @@ def test_main_writes_reports(
     assert evaluation.main(args) == 1
     args.no_gate = True
     assert evaluation.main(args) == 0
+    args.split = "test"
+    assert evaluation.main(args) == 0
+    assert (tmp_path / "out" / "latest-test.md").exists() and (tmp_path / "out" / "fake-test.json").exists()

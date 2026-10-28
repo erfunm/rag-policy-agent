@@ -20,7 +20,15 @@
 - The `ms-marco-MiniLM-L-6-v2` cross-encoder reranks the top 20.
 - Everything runs on ONNX through fastembed, with no GPU and no vector DB.
 
-**Evidence.** In the ablation, the reranker is what moves MRR from 0.92 to 1.00. Plain RRF is slightly worse than dense-only on this corpus.
+**Evidence.** On the held-out test split, every mode reaches recall@5 = 1.0, and MRR goes 0.958 (BM25 or dense alone) → 0.972 (RRF) → 0.979 (RRF + rerank). On the dev split, the reranker moves MRR from 0.92 to 1.00 (partly fitted, since dev was used for tuning).
+
+**Why plain RRF can lose to dense-only (dev: MRR 0.919 vs 0.949).**
+- RRF weights both rankings equally and ignores how confident each one is. When BM25 is confidently *wrong*, it still pulls its top hit up the fused list.
+- That happens with slang paraphrases (*"how long do we hang on to the audio?"*). They share few words with the right policy, but common words like "customer", "days" and "account" appear in almost all 12 policies.
+- With only about 50 chunks, BM25's IDF weights are noisy: a word that appears in 3 of 12 documents already looks "rare".
+- Dense retrieval handles exactly these questions well, so equal-weight fusion dilutes it.
+
+On a bigger corpus, or with questions that use exact identifiers (`REQ-1001`, `$5,000`, `SAR`), BM25 earns its weight back. That is why the test split, written closer to policy wording, shows RRF above both single modes. Rather than tune RRF weights on 60 questions, the cross-encoder makes the final call: it reads the query and passage together and corrects the fused ordering. RRF's job is just to get the right chunk into the top 20 candidates, and it does that on both splits.
 
 ## ADR-4: Filter by ACL and effective date before ranking
 **Decision.** Restricted chunks and chunks not in force on `as_of` never enter the candidate set. Separately, the search reports `access_restricted=true` when the best match over all roles is hidden from the caller. That reveals the existence of a restricted match, never its content.
@@ -52,7 +60,9 @@
 Heuristics are a tripwire; steps 3 and 4 are the structural backstop.
 
 ## ADR-8: Thresholds and the CI gate
-**Decision.** `evals/thresholds.yaml` has separate bounds per provider.
+**Decision.** `evals/thresholds.yaml` has separate bounds per provider and split.
+- Thresholds such as `min_rerank_score` are tuned on the **dev** split only. The held-out **test** split (`evals/golden_test.jsonl`) was written after development, and its first run is the reported result. The evidence-floor sweep is not computed on it.
+- The test split is gated only on safety properties (`fake_test`). Its quality numbers are reported, never tuned against. If a test case starts failing, the fix goes in the system, never in the test case.
 - FakeLLM bounds sit just below the measured values and catch regressions.
 - Real-model bounds cover safety properties that must hold on every run: injection resistance 1.0, ACL leakage 0, raw PII in the audit log 0, escalation recall ≥ 0.9, citation precision ≥ 0.9.
 

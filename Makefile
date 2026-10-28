@@ -23,8 +23,9 @@ test:
 ingest:  ## build and cache the BM25 + dense index (downloads the ONNX models once)
 	$(UV) run policy-agent ingest
 
-eval:  ## run the golden-set eval; LLM=anthropic|openai for real-model numbers
-	$(UV) run policy-agent eval --llm $(LLM)
+eval:  ## dev (tuning) split then held-out test split; LLM=anthropic|openai for real-model numbers
+	$(UV) run policy-agent eval --llm $(LLM) --split dev
+	$(UV) run policy-agent eval --llm $(LLM) --split test
 
 demo:  ## offline demo with FakeLLM, no API key needed
 	$(UV) run policy-agent ask "What proof of address is required for a customer sending \$$6,000 a month?"

@@ -23,7 +23,7 @@ The domain is a fictional e-money company, *Fernleaf Payments*, with 12 syntheti
 
 ```bash
 uv sync --all-extras          # Python 3.12, CPU only
-make eval                     # 60-case golden set + quality gate, offline FakeLLM
+make eval                     # dev (60) + held-out test (35) golden sets, offline FakeLLM
 uv run policy-agent ask "What proof of address is required for a customer sending \$6,000 a month?"
 ```
 
@@ -76,37 +76,48 @@ More detail is in [docs/architecture.md](docs/architecture.md).
 
 ## Eval results
 
-These numbers come from `make eval` (report: [`evals/reports/fake.md`](evals/reports/fake.md)). The run uses the 60-case golden set ([`evals/golden.jsonl`](evals/golden.jsonl)) with the deterministic **FakeLLM**. The FakeLLM is a rule-based stand-in that speaks the same tool-calling protocol, so these numbers measure retrieval, the loop and the guardrails, not a model's reasoning. Metric definitions are in [docs/evals.md](docs/evals.md).
+There are two golden sets, and only one of them is quoted as a result:
+
+- **Test split** ([`evals/golden_test.jsonl`](evals/golden_test.jsonl), 35 cases). Written after the system was built and **never used for tuning**. The evidence-floor sweep, the tuning tool, doesn't even run on it. These are the headline numbers.
+- **Dev split** ([`evals/golden.jsonl`](evals/golden.jsonl), 60 cases). Used during development and to tune `retrieval.min_rerank_score`, so its numbers are optimistic. It is the CI regression gate.
+
+`make eval` runs both. Reports: [`evals/reports/fake-test.md`](evals/reports/fake-test.md) and [`evals/reports/fake.md`](evals/reports/fake.md). Metric definitions are in [docs/evals.md](docs/evals.md).
+
+> **These numbers come from the FakeLLM, not a real model.** FakeLLM is a deterministic, rule-based stand-in that speaks the same tool-calling protocol. The retrieval rows don't depend on the LLM at all. The agent rows measure the loop, the guardrails and the refusal logic, **not** a model's reasoning or generation quality. Real-model numbers are below (TODO).
 
 **Retrieval ablation.** The question is used as the query, the ACL and as-of filters are applied, and k = 5.
 
-| Mode | Recall@5 | MRR |
-|---|---|---|
-| BM25 only | 0.949 | 0.897 |
-| Dense only (bge-small) | 0.962 | 0.949 |
-| Hybrid (RRF) | 0.949 | 0.919 |
-| **Hybrid + cross-encoder rerank** | **1.000** | **1.000** |
+| Mode | Test Recall@5 | Test MRR | Dev Recall@5 | Dev MRR |
+|---|---|---|---|---|
+| BM25 only | 1.000 | 0.958 | 0.949 | 0.897 |
+| Dense only (bge-small) | 1.000 | 0.958 | 0.962 | 0.949 |
+| Hybrid (RRF) | 1.000 | 0.972 | 0.949 | 0.919 |
+| **Hybrid + cross-encoder rerank** | **1.000** | **0.979** | 1.000 | 1.000 |
 
-On this small corpus, RRF alone does not beat dense retrieval, because lexical noise from the paraphrased questions drags it down. The reranker is what makes the hybrid pipeline work.
+On the test split every mode finds the right policy in the top 5, and the reranker mostly improves *ordering* (MRR 0.958 → 0.979). The gap between modes is much larger on dev, which has more slang paraphrases. The dev 1.000 is partly fitted, so don't quote it. Why plain RRF can score below dense-only: see [ADR-3](docs/design-decisions.md#adr-3-hybrid-retrieval-rrf-cross-encoder-rerank-all-on-cpu).
 
 **Agent behaviour (FakeLLM)**
 
-| Metric | Value |
-|---|---|
-| Status accuracy (answered vs escalated) | 0.900 |
-| Escalation precision / recall | 0.727 / 1.000 |
-| Answer accuracy (expected facts present) | 0.842 |
-| Citation precision | 1.000 |
-| Prompt-injection resistance | 1.000 (6/6) |
-| ACL leakage (restricted chunks cited) | 0 |
-| Raw PII in audit log | 0 |
-| Latency p50 / p95 (CPU, laptop) | 183 ms / 237 ms |
+| Metric | Test (held out) | Dev (tuned) |
+|---|---|---|
+| Status accuracy (answered vs escalated) | 0.971 | 0.900 |
+| Escalation precision / recall | 0.889 / 1.000 | 0.727 / 1.000 |
+| Answer accuracy (expected facts present) | 0.875 | 0.842 |
+| Citation precision | 0.962 | 1.000 |
+| Prompt-injection resistance | 1.000 (2/2) | 1.000 (6/6) |
+| ACL leakage (restricted chunks cited) | 0 | 0 |
+| Raw PII in audit log | 0 | 0 |
+| Latency p50 / p95 (CPU, laptop) | 191 ms / 277 ms | 178 ms / 246 ms |
 
-All 6 failures are over-cautious escalations of paraphrased questions such as *"someone quits on Friday, when are their logins switched off?"*. They happen because FakeLLM treats the retrieval evidence floor as a hard gate. The evidence-floor sweep in the [report](evals/reports/fake.md) shows that no retrieval-score threshold separates these from near-domain out-of-scope questions. That is why a real model receives the floor only as a hint and reads the passages itself.
+Test-split failures (3 of 35):
+- one over-cautious escalation of a paraphrased question (*"who needs to sign off when someone asks for extra system access?"*)
+- two multi-hop answers where FakeLLM's extractive answer picked up only one of the two facts
 
-**Claude Sonnet 5.5:** TODO, not yet measured. Run `make eval LLM=anthropic` (optionally with `--judge` for LLM-as-judge faithfulness) and paste the table from `evals/reports/anthropic.md`. Real-model runs are gated on safety properties only (injection, ACL leakage, PII, escalation recall, citation precision), because they are not deterministic.
+The 6 dev failures are all over-cautious escalations. The evidence-floor sweep in the [dev report](evals/reports/fake.md) shows that no retrieval-score threshold separates these from near-domain out-of-scope questions. That is why a real model receives the floor only as a hint and reads the passages itself.
 
-The golden set is small (60 cases, 4–20 per category), and the evidence floor was tuned on it. Treat the numbers as regression signals, not as estimates of production accuracy.
+**Claude Sonnet 5.5:** TODO, not yet measured. Run `make eval LLM=anthropic` (optionally add `--judge` to `uv run policy-agent eval --llm anthropic --split test` for LLM-as-judge faithfulness) and paste the table from `evals/reports/anthropic-test.md`. Real-model runs are gated on safety properties only (injection, ACL leakage, PII, escalation recall, citation precision), because they are not deterministic.
+
+Both sets are small (35 and 60 cases) and were hand-written by the same author as the corpus. The test-split questions turned out to stay closer to the policy wording than the dev paraphrases, which is one reason they score higher. Treat all of this as a regression suite, not an estimate of production accuracy.
 
 ## Guardrails
 
@@ -219,16 +230,16 @@ The server's role is fixed per process (`POLICY_AGENT_MCP_ROLE`), so a model can
 Full ADRs are in [docs/design-decisions.md](docs/design-decisions.md).
 
 - **No agent framework.** The loop is about 340 lines, including tracing, in [`agent/loop.py`](src/policy_agent/agent/loop.py), so every behaviour that matters stays visible and testable: step limits, error-to-tool-result, structured final answer, citation verification. LangChain and LlamaIndex would hide exactly that.
-- **Hybrid retrieval with RRF, then rerank.** BM25 catches exact terms (`SAR`, `$5,000`) and dense retrieval catches paraphrases. RRF fuses the two by rank, with no score calibration needed. The ablation above shows the reranker is the step that pays off.
+- **Hybrid retrieval with RRF, then rerank.** BM25 catches exact terms (`SAR`, `$5,000`) and dense retrieval catches paraphrases. RRF fuses the two by rank, with no score calibration needed. The reranker is the step that pays off. Plain RRF can lose to dense-only on a tiny corpus (ADR-3 explains why).
 - **Filter before ranking.** A restricted or superseded chunk can never be ranked, returned or cited. The agent learns only *that* a restricted policy matched best, never its content, so it can route the user to Compliance.
 - **FakeLLM.** It makes CI deterministic, free and secret-less, and it keeps the retrieval and refusal metrics reproducible. Real-model numbers are produced separately.
-- **Thresholds are tuned on the eval, with the trade-off shown.** The evidence floor comes from the sweep in the report. In compliance, a wrong answer costs more than an escalation, so the floor sits at the knee of escalation recall. CI bounds sit just below the measured values to catch regressions.
+- **Thresholds are tuned on the dev split only, with the trade-off shown.** The evidence floor comes from the sweep in the dev report; the test split is never used for tuning. In compliance, a wrong answer costs more than an escalation, so the floor sits at the knee of escalation recall. CI bounds sit just below the measured values to catch regressions.
 - **Role and date come from the request, not the model.** Tool arguments can never widen access.
 
 ## Limitations and next steps
 
 - The real-model numbers are not in this README yet (see TODO above). FakeLLM answers are extractive, so the answer-accuracy figures measure the pipeline, not generation quality.
-- The golden set is small and hand-written by the same author as the corpus, and thresholds were tuned on it. Next: a held-out split and questions written by real users.
+- Both golden sets are small and hand-written by the same author as the corpus. Thresholds are tuned on dev only, but the held-out test set is just 35 cases. Next: questions written by real users, and a larger test set.
 - The injection defence is heuristic plus structural (read-only tools, verified citations). It will not stop every attack. Next: a red-team set and a classifier-based detector.
 - The citation check is id-level, not claim-level. Next: run the optional LLM-as-judge (`--judge`) in a nightly job.
 - The ACL model is a role list per document, and the role header is trusted. In production, an authenticating gateway must set it.
@@ -256,7 +267,7 @@ src/policy_agent/
   api/app.py    FastAPI + SSE        mcp_server.py   MCP tools
   evaluation.py eval harness          cli.py          ask | ingest | eval | serve
 data/policies/  12 synthetic policies (13 versions)   data/cases.json
-evals/          golden.jsonl, thresholds.yaml, reports/
+evals/          golden.jsonl (dev), golden_test.jsonl (held out), thresholds.yaml, reports/
 ui/app.py       Streamlit demo
 tests/          unit/ + integration/ (97% coverage)
 ```

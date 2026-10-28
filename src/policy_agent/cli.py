@@ -95,7 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval", help="run the golden-set evaluation")
     ev.add_argument("--llm", choices=get_args(Provider), default=None)
-    ev.add_argument("--golden", default="evals/golden.jsonl")
+    ev.add_argument(
+        "--split",
+        choices=["dev", "test"],
+        default="dev",
+        help="dev = tuning set (evals/golden.jsonl); test = held-out set (evals/golden_test.jsonl)",
+    )
+    ev.add_argument("--golden", default=None, help="override the split's golden file")
     ev.add_argument("--thresholds", default="evals/thresholds.yaml")
     ev.add_argument("--out", default="evals/reports")
     ev.add_argument(

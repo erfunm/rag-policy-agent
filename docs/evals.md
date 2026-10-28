@@ -1,8 +1,17 @@
 # Evals
 
-Run `make eval` (FakeLLM, gated) or `make eval LLM=anthropic` (needs `ANTHROPIC_API_KEY`). Add `uv run policy-agent eval --llm anthropic --judge` for LLM-as-judge faithfulness. Reports go to `evals/reports/{latest,<provider>}.{md,json}`.
+Run `make eval` (FakeLLM, gated) or `make eval LLM=anthropic` (needs `ANTHROPIC_API_KEY`). Both run the dev split and then the held-out test split. Add `--judge` to `uv run policy-agent eval --llm anthropic --split test` for LLM-as-judge faithfulness. Reports go to `evals/reports/{latest,<provider>}.{md,json}` (dev) and `evals/reports/{latest,<provider>}-test.{md,json}` (test).
 
-## Golden set (`evals/golden.jsonl`)
+## Splits
+
+| Split | File | Cases | Use |
+|---|---|---|---|
+| dev | `evals/golden.jsonl` | 60 | Used while building the system and to tune `retrieval.min_rerank_score`. CI regression gate. Optimistic. |
+| test | `evals/golden_test.jsonl` | 35 | Written after development, never used for tuning, no evidence-floor sweep. **Quote these numbers.** Gated on safety properties only. |
+
+`tests/unit/test_evaluation.py` checks that the splits share no ids or questions and cover the same categories.
+
+## Golden-set format and dev categories (`evals/golden.jsonl`)
 
 `{id, category, question, role, as_of?, expected_status, expected_policy_ids, must_contain?, must_not_contain?}`
 
@@ -39,6 +48,6 @@ Run `make eval` (FakeLLM, gated) or `make eval LLM=anthropic` (needs `ANTHROPIC_
 
 ## Caveats
 
-- 60 cases is a regression suite, not a benchmark. One case is worth 1.7 points of status accuracy.
-- The corpus and the questions have the same author, and the evidence floor was tuned on this set. A held-out split is a listed next step.
+- 60 + 35 cases is a regression suite, not a benchmark. One test case is worth about 2.9 points of status accuracy.
+- The corpus and both question sets have the same author. The test split stays closer to the policy wording than the dev paraphrases, which partly explains why it scores higher.
 - The FakeLLM's answers are extractive. Its answer accuracy measures retrieval plus sentence selection, not generation.

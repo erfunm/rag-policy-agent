@@ -1,6 +1,8 @@
-# Eval report: fake (fake-llm)
+# Eval report: fake (fake-llm), dev split
 
-Generated 2026-10-28 15:23 UTC - 60 golden cases - prompt `2026-10-28.2` - agent retrieval mode `hybrid_rerank`.
+**Dev** split: used during development and to tune thresholds, so numbers are optimistic. Quote the test split instead.
+
+Generated 2026-10-28 17:48 UTC - 60 golden cases - prompt `2026-10-28.2` - agent retrieval mode `hybrid_rerank`.
 
 ## Retrieval ablation (question used as query, ACL + as_of filters applied, k=5)
 
@@ -39,8 +41,8 @@ Configured `retrieval.min_rerank_score` = -3.0. FakeLLM treats the floor as a ha
 | must_not_contain_violations | 0 |
 | acl_leakage | 0 |
 | grounding_downgrades | 0 |
-| latency_p50_ms | 244.0 |
-| latency_p95_ms | 366.5 |
+| latency_p50_ms | 171.8 |
+| latency_p95_ms | 207.1 |
 | avg_cost_usd | 0.000 |
 | avg_input_tokens | 1542 |
 | avg_output_tokens | 88 |

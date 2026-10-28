@@ -1,8 +1,15 @@
 """Golden-set evaluation harness: retrieval ablation, agent behaviour metrics and a CI quality gate.
 
 Deterministic metrics (retrieval, refusal, citations, injection, ACL) are reproducible with the
-FakeLLM and gate CI. Real-model runs (``--llm anthropic``) add latency/cost numbers and, with
-``--judge``, an LLM-as-judge faithfulness score.
+FakeLLM and gate CI.
+
+There are two splits. ``dev`` (``evals/golden.jsonl``) was used while building the system and to tune
+thresholds such as ``retrieval.min_rerank_score``, so its numbers are optimistic. ``test``
+(``evals/golden_test.jsonl``) was written afterwards and is never used for tuning: only its numbers
+are quoted as results. The evidence-floor sweep, the tuning tool, runs on ``dev`` only.
+
+Real-model runs (``--llm anthropic``) add latency/cost numbers and, with ``--judge``, an
+LLM-as-judge faithfulness score.
 """
 
 from __future__ import annotations
@@ -27,6 +34,9 @@ from policy_agent.guardrails import pii
 from policy_agent.llm import make_llm
 from policy_agent.models import AgentResponse, AskRequest, Chunk, Role
 from policy_agent.retrieval.hybrid import HybridRetriever
+
+Split = Literal["dev", "test"]
+GOLDEN_FILES: dict[Split, Path] = {"dev": Path("evals/golden.jsonl"), "test": Path("evals/golden_test.jsonl")}
 
 Category = Literal[
     "factual", "multi_hop", "tool", "temporal", "acl", "out_of_scope", "prompt_injection", "pii"
@@ -322,8 +332,13 @@ def _lookup(report: dict[str, Any], dotted: str) -> Any:
     return node
 
 
-def apply_gate(report: dict[str, Any], thresholds: dict[str, Any], provider: str) -> GateResult:
-    gates: dict[str, dict[str, float]] = thresholds.get(provider) or thresholds.get("default") or {}
+def gate_profile(provider: str, split: Split) -> str:
+    """Thresholds section for a run: ``fake`` for dev, ``fake_test`` for the held-out split."""
+    return provider if split == "dev" else f"{provider}_test"
+
+
+def apply_gate(report: dict[str, Any], thresholds: dict[str, Any], profile: str) -> GateResult:
+    gates: dict[str, dict[str, float]] = thresholds.get(profile) or thresholds.get("default") or {}
     gate = GateResult(passed=True)
     for metric, bound in gates.items():
         value = _lookup(report, metric)
@@ -347,8 +362,36 @@ def _fmt(v: Any) -> str:
 
 def render_markdown(report: dict[str, Any]) -> str:
     meta, agent, cats = report["meta"], report["agent"], report["per_category"]
+    split = meta.get("split", "dev")
+    split_note = (
+        "Held-out **test** split: never used for tuning. These are the numbers to quote."
+        if split == "test"
+        else "**Dev** split: used during development and to tune thresholds, so numbers are optimistic. "
+        "Quote the test split instead."
+    )
+    if report["evidence_floor_sweep"]:
+        sweep = [
+            "## Evidence-floor sweep (cross-encoder score alone; positive = should escalate)",
+            "",
+            f"Configured `retrieval.min_rerank_score` = {report['evidence_floor']}. "
+            "FakeLLM treats the floor as a hard gate; real LLMs get it as a hint and read the passages.",
+            "",
+            "| min_rerank_score | Escalation precision | Escalation recall | False escalations "
+            "| Wrongly answered |",
+            "|---|---|---|---|---|",
+            *[
+                f"| {r['min_rerank_score']} | {_fmt(r['escalation_precision'])} "
+                f"| {_fmt(r['escalation_recall'])} | {r['false_escalations']} | {r['wrongly_answered']} |"
+                for r in report["evidence_floor_sweep"]
+            ],
+            "",
+        ]
+    else:
+        sweep = []
     lines = [
-        f"# Eval report: {meta['provider']} ({meta['model']})",
+        f"# Eval report: {meta['provider']} ({meta['model']}), {split} split",
+        "",
+        split_note,
         "",
         f"Generated {meta['generated_at']} - {meta['cases']} golden cases - "
         f"prompt `{meta['prompt_version']}` - agent retrieval mode `{meta['retrieval_mode']}`.",
@@ -359,20 +402,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "|---|---|---|",
         *[f"| {r['mode']} | {_fmt(r['recall_at_5'])} | {_fmt(r['mrr'])} |" for r in report["retrieval"]],
         "",
-        "## Evidence-floor sweep (cross-encoder score alone; positive = should escalate)",
-        "",
-        f"Configured `retrieval.min_rerank_score` = {report['evidence_floor']}. "
-        "FakeLLM treats the floor as a hard gate; real LLMs get it as a hint and read the passages.",
-        "",
-        "| min_rerank_score | Escalation precision | Escalation recall | False escalations "
-        "| Wrongly answered |",
-        "|---|---|---|---|---|",
-        *[
-            f"| {r['min_rerank_score']} | {_fmt(r['escalation_precision'])} | {_fmt(r['escalation_recall'])} "
-            f"| {r['false_escalations']} | {r['wrongly_answered']} |"
-            for r in report["evidence_floor_sweep"]
-        ],
-        "",
+        *sweep,
         "## Agent",
         "",
         "| Metric | Value |",
@@ -422,6 +452,7 @@ def run_eval(
     thresholds: dict[str, Any],
     agent: PolicyAgent | None = None,
     judge: bool = False,
+    split: Split = "dev",
 ) -> dict[str, Any]:
     agent = agent or build_agent(settings)
     retriever = agent.retriever
@@ -440,18 +471,20 @@ def run_eval(
             "prompt_version": PROMPT_VERSION,
             "retrieval_mode": settings.retrieval.mode,
             "generated_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+            "split": split,
             "cases": len(cases),
             "judge": settings.llm.judge_model if judge else None,
         },
         "retrieval": retrieval,
         "retrieval_by_mode": {r["mode"]: r for r in retrieval},
-        "evidence_floor_sweep": evidence_floor_sweep(retriever, cases),
+        # Tuning tool: never computed on the held-out split, so it can't leak into threshold choices.
+        "evidence_floor_sweep": evidence_floor_sweep(retriever, cases) if split == "dev" else [],
         "evidence_floor": settings.retrieval.min_rerank_score,
         "agent": {**agent_metrics(results), "audit_pii_leaks": audit_pii_leaks},
         "per_category": per_category(results),
         "cases": [r.to_json() for r in results],
     }
-    gate = apply_gate(report, thresholds, agent.llm.provider)
+    gate = apply_gate(report, thresholds, gate_profile(agent.llm.provider, split))
     report["gate"] = {"passed": gate.passed, "checks": gate.checks}
     return report
 
@@ -462,17 +495,19 @@ def main(args: argparse.Namespace) -> int:
         settings.retrieval = settings.retrieval.model_copy(update={"mode": args.mode})
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    settings.observability.audit_log_path = out / "eval-audit.jsonl"
+    split: Split = args.split
+    suffix = "" if split == "dev" else f"-{split}"
+    settings.observability.audit_log_path = out / f"eval-audit{suffix}.jsonl"
     settings.observability.audit_log_path.unlink(missing_ok=True)
 
-    cases = load_golden(Path(args.golden))[: args.limit]
+    cases = load_golden(Path(args.golden) if args.golden else GOLDEN_FILES[split])[: args.limit]
     thresholds = yaml.safe_load(Path(args.thresholds).read_text()) or {}
     agent = build_agent(settings, make_llm(settings.llm, args.llm))
-    report = run_eval(settings, cases, thresholds, agent, judge=args.judge)
+    report = run_eval(settings, cases, thresholds, agent, judge=args.judge, split=split)
 
     md = render_markdown(report)
     provider = report["meta"]["provider"]
-    for name in ("latest", provider):
+    for name in (f"latest{suffix}", f"{provider}{suffix}"):
         (out / f"{name}.md").write_text(md)
         (out / f"{name}.json").write_text(json.dumps(report, indent=2, default=str))
     print(md)
