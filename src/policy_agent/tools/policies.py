@@ -1,0 +1,152 @@
+"""search_policies and get_policy, backed by the ingested corpus and its front-matter."""
+
+from __future__ import annotations
+
+from datetime import date
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from policy_agent.guardrails import injection
+from policy_agent.models import Chunk, PolicyDoc
+from policy_agent.tools.registry import Tool, ToolContext, ToolOutput, error_output
+
+
+def render_chunk_text(chunk: Chunk, ctx: ToolContext, flags: list[str]) -> str:
+    """Sanitise and spotlight retrieved text before it reaches the model."""
+    clean = injection.sanitise(chunk.text, strip=ctx.settings.guardrails.strip_injections)
+    if clean.flagged and "injection_in_retrieved_text" not in flags:
+        flags.append("injection_in_retrieved_text")
+    return injection.spotlight(chunk.chunk_id, clean.text)
+
+
+class SearchPoliciesArgs(BaseModel):
+    query: str = Field(min_length=2, max_length=500, description="Search query in plain language.")
+    as_of: date | None = Field(
+        default=None,
+        description="Date the policies must be in force on (YYYY-MM-DD). Defaults to the request date.",
+    )
+
+
+def search_policies(args: SearchPoliciesArgs, ctx: ToolContext) -> ToolOutput:
+    as_of = args.as_of or ctx.as_of
+    span = None
+    if ctx.tracer is not None:
+        span = ctx.tracer.start(
+            "retrieval policy-library",
+            kind="client",
+            parent=ctx.span,
+            attributes={
+                "gen_ai.operation.name": "retrieval",
+                "gen_ai.data_source.id": "policy-library",
+                "gen_ai.retrieval.top_k": ctx.settings.retrieval.top_k,
+                "policy_agent.retrieval.mode": ctx.settings.retrieval.mode,
+                "policy_agent.as_of": as_of.isoformat(),
+            },
+        )
+    res = ctx.retriever.search(args.query, ctx.role, as_of)
+    if span is not None:
+        span.set_many(
+            {
+                "policy_agent.retrieval.results": len(res.results),
+                "policy_agent.retrieval.top_score": res.results[0].score if res.results else None,
+                "policy_agent.retrieval.evidence_sufficient": res.evidence_sufficient,
+                "policy_agent.retrieval.access_restricted": res.access_restricted,
+                "policy_agent.retrieval.chunk_ids": [r.chunk.chunk_id for r in res.results],
+            }
+        )
+        span.end()
+    flags: list[str] = []
+    results: list[dict[str, Any]] = [
+        {
+            "chunk_id": r.chunk.chunk_id,
+            "policy_id": r.chunk.policy_id,
+            "title": r.chunk.title,
+            "version": r.chunk.version,
+            "effective_date": r.chunk.effective_date.isoformat(),
+            "section": r.chunk.section,
+            "score": round(r.score, 4),
+            "text": render_chunk_text(r.chunk, ctx, flags),
+        }
+        for r in res.results
+    ]
+    return ToolOutput(
+        content={
+            "as_of": as_of.isoformat(),
+            "evidence_sufficient": res.evidence_sufficient,
+            "access_restricted": res.access_restricted,
+            "results": results,
+        },
+        evidence_ids=[r.chunk.chunk_id for r in res.results],
+        flags=flags,
+    )
+
+
+class GetPolicyArgs(BaseModel):
+    policy_id: str = Field(min_length=3, max_length=40, description="Policy id, e.g. POL-ONB-021.")
+    as_of: date | None = Field(
+        default=None, description="Return the version in force on this date (YYYY-MM-DD)."
+    )
+
+
+def _version_in_force(versions: list[PolicyDoc], as_of: date) -> PolicyDoc | None:
+    return next((v for v in versions if v.in_force(as_of)), None)
+
+
+def get_policy(args: GetPolicyArgs, ctx: ToolContext) -> ToolOutput:
+    as_of = args.as_of or ctx.as_of
+    versions = ctx.retriever.policy_versions(args.policy_id.upper())
+    if not versions:
+        return error_output(f"policy {args.policy_id} not found")
+    if not versions[0].visible_to(ctx.role):
+        return error_output(
+            f"policy {args.policy_id} is restricted for role {ctx.role}; escalate to Compliance"
+        )
+    doc = _version_in_force(versions, as_of)
+    if doc is None:
+        return error_output(f"no version of {args.policy_id} was in force on {as_of.isoformat()}")
+    sections = [c for c in ctx.retriever.chunks if c.policy_id == doc.policy_id and c.version == doc.version]
+    flags: list[str] = []
+    return ToolOutput(
+        content={
+            "policy_id": doc.policy_id,
+            "title": doc.title,
+            "version": doc.version,
+            "effective_date": doc.effective_date.isoformat(),
+            "superseded_on": doc.superseded_on.isoformat() if doc.superseded_on else None,
+            "owner": doc.owner,
+            "summary": doc.summary,
+            "versions": [
+                {"version": v.version, "effective_date": v.effective_date.isoformat()} for v in versions
+            ],
+            "sections": [
+                {"chunk_id": c.chunk_id, "section": c.section, "text": render_chunk_text(c, ctx, flags)}
+                for c in sections
+            ],
+        },
+        evidence_ids=[c.chunk_id for c in sections],
+        flags=flags,
+    )
+
+
+SEARCH_POLICIES = Tool(
+    name="search_policies",
+    description=(
+        "Search the internal policy library (hybrid keyword + semantic search, reranked). Only policies the "
+        "user may see and that are in force on as_of are searched. Returns the top passages with chunk_ids "
+        "to cite, evidence_sufficient (false means nothing relevant was found) and access_restricted (true "
+        "means the best match is in a policy this user cannot see)."
+    ),
+    args_model=SearchPoliciesArgs,
+    fn=search_policies,
+)
+
+GET_POLICY = Tool(
+    name="get_policy",
+    description=(
+        "Fetch one policy by id: the version in force on as_of, its metadata (owner, effective date, "
+        "version history) and every section with its chunk_id."
+    ),
+    args_model=GetPolicyArgs,
+    fn=get_policy,
+)

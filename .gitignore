@@ -2,3 +2,14 @@
 __pycache__/
 *.pyc
 logs/
+.cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+dist/
+evals/reports/*.json
+!evals/reports/.gitkeep
+evals/reports/*.jsonl

@@ -1,7 +1,0 @@
-Title: Data Retention Standard v1.4
-Effective Date: 2023-11-15
-
-- Store KYC records for a minimum of 7 years after account closure.
-- Access to audit logs is restricted to Compliance and Security roles.
-- Delete marketing preferences within 30 days of withdrawal of consent.
-- Nightly backups must be encrypted with AES-256.
