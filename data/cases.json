@@ -1,0 +1,6 @@
+{
+  "REQ-1001": {"status": "pending-review", "type": "onboarding", "risk_flag": "high-risk jurisdiction", "assigned_team": "Financial Crime Operations", "related_policy": "POL-ONB-021", "last_updated": "2026-10-20"},
+  "REQ-2002": {"status": "approved", "type": "onboarding", "risk_flag": "none", "assigned_team": "Customer Operations", "related_policy": "POL-ONB-021", "last_updated": "2026-09-02"},
+  "REQ-3003": {"status": "open", "type": "card-dispute", "risk_flag": "fraud-coded", "assigned_team": "Card Operations", "related_policy": "POL-CRD-003", "last_updated": "2026-10-24"},
+  "REQ-4004": {"status": "closed", "type": "complaint", "risk_flag": "none", "assigned_team": "Customer Operations", "related_policy": "POL-CMP-010", "last_updated": "2026-08-11"}
+}

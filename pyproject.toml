@@ -61,7 +61,8 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "N"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src/policy_agent"]
+mypy_path = "src"
+packages = ["policy_agent"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]

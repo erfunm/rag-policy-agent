@@ -1,7 +1,0 @@
-Title: Customer Onboarding Policy v2.1
-Effective Date: 2024-03-01
-
-- Verify identity using government ID and selfie match.
-- Require proof of address for accounts above $5,000 monthly volume.
-- For high-risk jurisdictions, escalate to manual review.
-- Transactions above $10,000 trigger enhanced due diligence.
